@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server"
 
 interface Endpoint {
   id: string
+  name: string
   path: string
   method: string
   responses: { [statusCode: number]: string }
@@ -10,20 +11,44 @@ interface Endpoint {
   description?: string
 }
 
-export async function GET(request: NextRequest, { params }: { params: { path: string[] } }) {
-  return handleRequest(request, params, "GET")
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const resolvedParams = await params
+  return handleRequest(request, resolvedParams, "GET")
 }
 
-export async function POST(request: NextRequest, { params }: { params: { path: string[] } }) {
-  return handleRequest(request, params, "POST")
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const resolvedParams = await params
+  return handleRequest(request, resolvedParams, "POST")
 }
 
-export async function PUT(request: NextRequest, { params }: { params: { path: string[] } }) {
-  return handleRequest(request, params, "PUT")
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const resolvedParams = await params
+  return handleRequest(request, resolvedParams, "PUT")
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { path: string[] } }) {
-  return handleRequest(request, params, "DELETE")
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const resolvedParams = await params
+  return handleRequest(request, resolvedParams, "DELETE")
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const resolvedParams = await params
+  return handleRequest(request, resolvedParams, "PATCH")
 }
 
 async function handleRequest(request: NextRequest, params: { path: string[] }, method: string) {
@@ -71,6 +96,7 @@ async function handleRequest(request: NextRequest, params: { path: string[] }, m
     const defaultEndpoints: Endpoint[] = [
       {
         id: "1",
+        name: "Get User",
         path: "/api/v1/user",
         method: "GET",
         responses: {

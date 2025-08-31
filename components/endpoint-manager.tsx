@@ -35,7 +35,7 @@ export default function EndpointManager() {
         },
       ])
       setNewEndpoint({ path: "", method: "GET", response: "{}" })
-    } catch (error) {
+    } catch {
       alert("Invalid JSON response")
     }
   }
@@ -96,15 +96,14 @@ export default function EndpointManager() {
             <div key={index} className="border-l-4 border-blue-500 pl-4">
               <div className="flex items-center gap-2 mb-2">
                 <span
-                  className={`px-2 py-1 rounded text-sm font-medium ${
-                    endpoint.method === "GET"
-                      ? "bg-green-100 text-green-800"
-                      : endpoint.method === "POST"
-                        ? "bg-blue-100 text-blue-800"
-                        : endpoint.method === "PUT"
-                          ? "bg-yellow-100 text-yellow-800"
-                          : "bg-red-100 text-red-800"
-                  }`}
+                  className={`px-2 py-1 rounded text-sm font-medium ${endpoint.method === "GET"
+                    ? "bg-green-100 text-green-800"
+                    : endpoint.method === "POST"
+                      ? "bg-blue-100 text-blue-800"
+                      : endpoint.method === "PUT"
+                        ? "bg-yellow-100 text-yellow-800"
+                        : "bg-red-100 text-red-800"
+                    }`}
                 >
                   {endpoint.method}
                 </span>

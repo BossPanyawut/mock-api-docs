@@ -22,11 +22,7 @@ interface Endpoint {
   fieldDescriptions?: { [statusCode: number]: FieldDescription[] }
 }
 
-interface EndpointGroup {
-  name: string
-  endpoints: Endpoint[]
-  expanded: boolean
-}
+
 
 interface Project {
   id: string
@@ -60,7 +56,7 @@ export default function Home() {
     name: "",
     description: "",
   })
-  const [testResponse, setTestResponse] = useState("")
+
   const [showAddForm, setShowAddForm] = useState(false)
   const [showEditResponse, setShowEditResponse] = useState(false)
   const [showProjectForm, setShowProjectForm] = useState(false)
@@ -92,6 +88,7 @@ export default function Home() {
   useEffect(() => {
     loadProjects()
     loadAllData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -99,6 +96,7 @@ export default function Home() {
       loadEndpoints(currentProject.id)
       loadGroups(currentProject.id)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject])
 
   const loadProjects = async () => {
@@ -403,7 +401,7 @@ export default function Home() {
       if (error instanceof Error) {
         message = error.message;
       } else if (typeof error === "object" && error !== null && "message" in error) {
-        // @ts-ignore
+        // @ts-expect-error - error object may have message property
         message = error.message;
       } else if (typeof error === "string") {
         message = error;
@@ -439,7 +437,7 @@ export default function Home() {
 
     try {
       JSON.parse(editingResponse)
-    } catch (e) {
+    } catch {
       alert("Response ต้องเป็น JSON ที่ถูกต้อง")
       return
     }
@@ -643,7 +641,7 @@ export default function Home() {
     setShowFieldDescriptions(true)
   }
 
-  const detectFieldType = (value: any): string => {
+  const detectFieldType = (value: unknown): string => {
     if (value === null) return "NULL"
     if (typeof value === "string") return "STRING"
     if (typeof value === "number") {
@@ -660,6 +658,7 @@ export default function Home() {
       const parsed = JSON.parse(jsonString)
       const fields: FieldDescription[] = []
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const extractFromObject = (obj: any, prefix = "") => {
         Object.keys(obj).forEach((key) => {
           const fullKey = prefix ? `${prefix}.${key}` : key
@@ -698,7 +697,7 @@ export default function Home() {
       }
 
       return fields
-    } catch (error) {
+    } catch {
       return []
     }
   }
@@ -718,9 +717,7 @@ export default function Home() {
     }
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
-  }
+
 
   const selectProject = (project: Project) => {
     setCurrentProject(project)
@@ -1379,7 +1376,7 @@ export default function Home() {
 
               {editingFieldDescriptions.length === 0 && (
                 <div className="text-center py-8 text-gray-400">
-                  <p>No fields defined. Click "Add Field" or "Auto Generate" to get started.</p>
+                  <p>No fields defined. Click &quot;Add Field&quot; or &quot;Auto Generate&quot; to get started.</p>
                 </div>
               )}
             </div>
@@ -1457,7 +1454,7 @@ export default function Home() {
                   type="text"
                   value={newEndpoint.group}
                   onChange={(e) => setNewEndpoint({ ...newEndpoint, group: e.target.value })}
-                  placeholder="Enter group name (e.g., Users, Auth, Products)"
+                  placeholder="Enter group name (e.g. Users, Auth, Products)"
                   list="existing-groups"
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-pink-500"
                 />
