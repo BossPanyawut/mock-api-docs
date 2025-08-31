@@ -68,6 +68,9 @@ export default function Home() {
   const [editingResponse, setEditingResponse] = useState("")
   const [editingRequestBody, setEditingRequestBody] = useState("")
   const [editingQueryParams, setEditingQueryParams] = useState("")
+  const [editingQueryParamRows, setEditingQueryParamRows] = useState<
+    { key: string; value: string; description: string }[]
+  >([])
   const [showFieldDescriptions, setShowFieldDescriptions] = useState(false)
   const [editingFieldDescriptions, setEditingFieldDescriptions] = useState<FieldDescription[]>([])
   const [searchTerm, setSearchTerm] = useState("")
@@ -716,21 +719,50 @@ export default function Home() {
 
   const updateQueryParams = async () => {
     if (!selectedEndpoint) return
-    let formatted: string
-    try {
-      const parsed = JSON.parse(editingQueryParams || "{}")
-      formatted = JSON.stringify(parsed, null, 2)
-      setEditingQueryParams(formatted)
-    } catch {
-      alert("Query Params ต้องเป็น JSON ที่ถูกต้อง")
-      return
+
+    // Validate rows: require non-empty unique keys
+    const keys = new Set<string>()
+    for (const r of editingQueryParamRows) {
+      const k = r.key.trim()
+      if (!k) {
+        alert("กรุณากรอก Key ของแต่ละแถวให้ครบถ้วน")
+        return
+      }
+      if (keys.has(k)) {
+        alert(`คีย์ซ้ำ: ${k}`)
+        return
+      }
+      keys.add(k)
     }
+
+    const inferValue = (v: string): unknown => {
+      const s = v.trim()
+      if (s === "") return ""
+      if (s === "true") return true
+      if (s === "false") return false
+      if (/^-?\d+(?:\.\d+)?$/.test(s)) return Number(s)
+      if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) {
+        try {
+          return JSON.parse(s)
+        } catch {
+          // fallthrough to string
+        }
+      }
+      return v
+    }
+
+    const payload: Record<string, { value: unknown; description: string }> = {}
+    editingQueryParamRows.forEach((r) => {
+      payload[r.key.trim()] = { value: inferValue(r.value), description: r.description || "" }
+    })
+
+    const formatted = JSON.stringify(payload, null, 2)
+
     setLoading(true)
     try {
-      const parsed = JSON.parse(formatted)
       const { error } = await supabase
         .from("endpoints")
-        .update({ query_params: parsed })
+        .update({ query_params: payload })
         .eq("id", selectedEndpoint.id)
       if (error) throw error
       const updatedEndpoints = endpoints.map((ep) =>
@@ -1227,7 +1259,7 @@ export default function Home() {
                 },
                 {} as Record<string, typeof endpoints>,
               ),
-            ).map(([groupName, groupEndpoints]) => (
+            ).sort(([a], [b]) => a.localeCompare(b)).map(([groupName, groupEndpoints]) => (
               <div
                 key={groupName}
                 className={`mb-6 rounded ${dragOverGroup === groupName ? "ring-2 ring-pink-500/60" : ""}`}
@@ -1389,36 +1421,7 @@ export default function Home() {
                       <span className="text-xs">Edit</span>
                     </button>
                   </div>
-                  {/* Request Body / Query Params quick view */}
-                  <div className="mt-3 text-xs text-gray-400">
-                    {selectedEndpoint.method === "GET" ? (
-                      <div className="flex items-center justify-between">
-                        <span>Query Params</span>
-                        <button
-                          onClick={() => {
-                            setEditingQueryParams(selectedEndpoint.queryParams || "{}")
-                            setShowEditQueryParams(true)
-                          }}
-                          className="text-gray-400 hover:text-white text-xs"
-                        >
-                          Edit Params
-                        </button>
-                      </div>
-                    ) : selectedEndpoint.method === "POST" || selectedEndpoint.method === "PUT" ? (
-                      <div className="flex items-center justify-between">
-                        <span>Request Body</span>
-                        <button
-                          onClick={() => {
-                            setEditingRequestBody(selectedEndpoint.requestBody || "{}")
-                            setShowEditRequestBody(true)
-                          }}
-                          className="text-gray-400 hover:text-white text-xs"
-                        >
-                          Edit Body
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
+
                 </div>
 
                 {/* Params / Body Examples */}
@@ -1426,11 +1429,37 @@ export default function Home() {
                   <div className="mb-6">
                     <h2 className="text-xl font-semibold text-white mb-4">Params Example</h2>
                     <div className="bg-gray-900 rounded-lg p-4 mb-4">
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center justify-between mb-3">
                         <span className="text-sm text-gray-400">Query Params</span>
                         <button
                           onClick={() => {
-                            setEditingQueryParams(selectedEndpoint.queryParams || "{}")
+                            // Initialize editable rows from current JSON
+                            let rows: { key: string; value: string; description: string }[] = []
+                            try {
+                              const obj = selectedEndpoint.queryParams
+                                ? JSON.parse(selectedEndpoint.queryParams)
+                                : {}
+                              if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+                                rows = Object.keys(obj).map((k) => {
+                                  const v = (obj as any)[k]
+                                  if (v && typeof v === "object" && !Array.isArray(v) && ("value" in v || "description" in v)) {
+                                    return {
+                                      key: k,
+                                      value: v.value !== undefined && v.value !== null ? String(v.value) : "",
+                                      description: v.description ? String(v.description) : "",
+                                    }
+                                  }
+                                  return {
+                                    key: k,
+                                    value: v !== undefined && v !== null ? String(v) : "",
+                                    description: "",
+                                  }
+                                })
+                              }
+                            } catch {
+                              rows = []
+                            }
+                            setEditingQueryParamRows(rows.length ? rows : [{ key: "", value: "", description: "" }])
                             setShowEditQueryParams(true)
                           }}
                           className="text-gray-400 hover:text-white flex items-center space-x-1"
@@ -1439,9 +1468,74 @@ export default function Home() {
                           <span className="text-xs">Edit</span>
                         </button>
                       </div>
-                      <pre className="text-sm text-gray-300 overflow-x-auto">
-                        <code>{selectedEndpoint.queryParams || "{}"}</code>
-                      </pre>
+                      {/* Render query params as a simple table (Key / Value / Description) */}
+                      {(() => {
+                        let rows: { key: string; value: string; description: string }[] = []
+                        try {
+                          const parsed = selectedEndpoint.queryParams ? JSON.parse(selectedEndpoint.queryParams) : {}
+                          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                            rows = Object.keys(parsed).map((k) => {
+                              const v = (parsed as any)[k]
+                              if (v && typeof v === "object" && !Array.isArray(v) && ("value" in v || "description" in v)) {
+                                return {
+                                  key: k,
+                                  value:
+                                    v.value === null || typeof v.value === "undefined"
+                                      ? ""
+                                      : typeof v.value === "object"
+                                        ? JSON.stringify(v.value)
+                                        : String(v.value),
+                                  description: v.description ? String(v.description) : "",
+                                }
+                              }
+                              return {
+                                key: k,
+                                value:
+                                  v === null || typeof v === "undefined"
+                                    ? ""
+                                    : typeof v === "object"
+                                      ? JSON.stringify(v)
+                                      : String(v),
+                                description: "",
+                              }
+                            })
+                          }
+                        } catch {
+                          // If parsing fails, show empty table
+                          rows = []
+                        }
+
+                        if (rows.length === 0) {
+                          return (
+                            <div className="text-sm text-gray-500 bg-black/20 rounded-md p-3 border border-gray-800">
+                              No query params defined
+                            </div>
+                          )
+                        }
+
+                        return (
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full border-collapse">
+                              <thead>
+                                <tr className="border-b border-gray-800">
+                                  <th className="text-left text-xs font-medium text-gray-400 px-3 py-2">Key</th>
+                                  <th className="text-left text-xs font-medium text-gray-400 px-3 py-2">Value</th>
+                                  <th className="text-left text-xs font-medium text-gray-400 px-3 py-2">Description</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((row) => (
+                                  <tr key={row.key} className="border-b border-gray-800 last:border-0">
+                                    <td className="px-3 py-2 text-sm text-white whitespace-nowrap">{row.key}</td>
+                                    <td className="px-3 py-2 text-sm text-gray-300">{row.value}</td>
+                                    <td className="px-3 py-2 text-sm text-gray-400">{row.description}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )
+                      })()}
                     </div>
                   </div>
                 ) : selectedEndpoint.method === "POST" || selectedEndpoint.method === "PUT" ? (
@@ -1656,20 +1750,95 @@ export default function Home() {
       {showEditQueryParams && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-900 rounded-lg p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-white mb-4">Edit Query Params</h3>
-
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-300 mb-2">Params JSON</label>
-              <textarea
-                value={editingQueryParams}
-                onChange={(e) => setEditingQueryParams(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-pink-500 font-mono text-sm"
-                rows={15}
-                placeholder='Enter JSON like {"page":1, "q":""}'
-              />
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-white">Edit Query Params</h3>
+              <button
+                onClick={() =>
+                  setEditingQueryParamRows((rows) => [...rows, { key: "", value: "", description: "" }])
+                }
+                className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm flex items-center space-x-1"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Param</span>
+              </button>
             </div>
 
-            <div className="flex space-x-3">
+            <div className="overflow-x-auto border border-gray-800 rounded-md">
+              <table className="min-w-full border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-800">
+                    <th className="text-left text-xs font-medium text-gray-400 px-3 py-2">Key</th>
+                    <th className="text-left text-xs font-medium text-gray-400 px-3 py-2">Value</th>
+                    <th className="text-left text-xs font-medium text-gray-400 px-3 py-2">Description</th>
+                    <th className="w-10"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {editingQueryParamRows.map((row, idx) => (
+                    <tr key={idx} className="border-b border-gray-800 last:border-0">
+                      <td className="px-3 py-2">
+                        <input
+                          value={row.key}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setEditingQueryParamRows((rows) => {
+                              const copy = [...rows]
+                              copy[idx] = { ...copy[idx], key: v }
+                              return copy
+                            })
+                          }}
+                          className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-sm text-white focus:outline-none focus:border-pink-500"
+                          placeholder="key"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          value={row.value}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setEditingQueryParamRows((rows) => {
+                              const copy = [...rows]
+                              copy[idx] = { ...copy[idx], value: v }
+                              return copy
+                            })
+                          }}
+                          className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-sm text-white focus:outline-none focus:border-pink-500"
+                          placeholder="value"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          value={row.description}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setEditingQueryParamRows((rows) => {
+                              const copy = [...rows]
+                              copy[idx] = { ...copy[idx], description: v }
+                              return copy
+                            })
+                          }}
+                          className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-sm text-white focus:outline-none focus:border-pink-500"
+                          placeholder="description"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          onClick={() =>
+                            setEditingQueryParamRows((rows) => rows.filter((_, i) => i !== idx))
+                          }
+                          className="text-gray-400 hover:text-red-400"
+                          aria-label="Remove"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex space-x-3 mt-4">
               <button
                 onClick={updateQueryParams}
                 className="flex-1 bg-pink-500 hover:bg-pink-600 text-white px-4 py-2 rounded-lg font-medium"
