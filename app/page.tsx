@@ -67,7 +67,7 @@ export default function Home() {
   const [view, setView] = useState<"projects" | "endpoints">("projects")
   const [editingResponse, setEditingResponse] = useState("")
   const [editingRequestBody, setEditingRequestBody] = useState("")
-  const [editingQueryParams, setEditingQueryParams] = useState("")
+
   const [editingQueryParamRows, setEditingQueryParamRows] = useState<
     { key: string; value: string; description: string }[]
   >([])
@@ -1080,10 +1080,12 @@ export default function Home() {
                     <span className="text-gray-400">Endpoints</span>
                     <span className="bg-gray-800 text-pink-400 px-2 py-1 rounded font-mono text-xs">
                       {(() => {
-                        const groupIds = new Set(
-                          allGroups.filter((g) => g.project_id === project.id).map((g) => g.id),
+
+                        // Count endpoints belonging to this project's groups
+                        const groupNames = new Set(
+                          allGroups.filter((g) => g.project_id === project.id).map((g) => g.name),
                         )
-                        return allEndpoints.filter((ep) => groupIds.has((ep as any).group_id)).length
+                        return allEndpoints.filter((ep) => groupNames.has(ep.group)).length
                       })()}
                     </span>
                   </div>
@@ -1436,22 +1438,35 @@ export default function Home() {
                             // Initialize editable rows from current JSON
                             let rows: { key: string; value: string; description: string }[] = []
                             try {
-                              const obj = selectedEndpoint.queryParams
+                              const obj: unknown = selectedEndpoint.queryParams
                                 ? JSON.parse(selectedEndpoint.queryParams)
                                 : {}
                               if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-                                rows = Object.keys(obj).map((k) => {
-                                  const v = (obj as any)[k]
-                                  if (v && typeof v === "object" && !Array.isArray(v) && ("value" in v || "description" in v)) {
+                                const rec = obj as Record<string, unknown>
+                                rows = Object.keys(rec).map((k) => {
+                                  const v = rec[k]
+                                  if (
+                                    v &&
+                                    typeof v === "object" &&
+                                    !Array.isArray(v) &&
+                                    ("value" in (v as Record<string, unknown>) ||
+                                      "description" in (v as Record<string, unknown>))
+                                  ) {
+                                    const pv = v as { value?: unknown; description?: unknown }
                                     return {
                                       key: k,
-                                      value: v.value !== undefined && v.value !== null ? String(v.value) : "",
-                                      description: v.description ? String(v.description) : "",
+                                      value:
+                                        pv.value !== undefined && pv.value !== null
+                                          ? typeof pv.value === "object"
+                                            ? JSON.stringify(pv.value)
+                                            : String(pv.value)
+                                          : "",
+                                      description: pv.description ? String(pv.description) : "",
                                     }
                                   }
                                   return {
                                     key: k,
-                                    value: v !== undefined && v !== null ? String(v) : "",
+                                    value: v !== undefined && v !== null ? String(v as unknown as string) : "",
                                     description: "",
                                   }
                                 })
@@ -1472,20 +1487,30 @@ export default function Home() {
                       {(() => {
                         let rows: { key: string; value: string; description: string }[] = []
                         try {
-                          const parsed = selectedEndpoint.queryParams ? JSON.parse(selectedEndpoint.queryParams) : {}
-                          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                          const parsedUnknown: unknown = selectedEndpoint.queryParams
+                            ? JSON.parse(selectedEndpoint.queryParams)
+                            : {}
+                          if (parsedUnknown && typeof parsedUnknown === "object" && !Array.isArray(parsedUnknown)) {
+                            const parsed = parsedUnknown as Record<string, unknown>
                             rows = Object.keys(parsed).map((k) => {
-                              const v = (parsed as any)[k]
-                              if (v && typeof v === "object" && !Array.isArray(v) && ("value" in v || "description" in v)) {
+                              const v = parsed[k]
+                              if (
+                                v &&
+                                typeof v === "object" &&
+                                !Array.isArray(v) &&
+                                ("value" in (v as Record<string, unknown>) ||
+                                  "description" in (v as Record<string, unknown>))
+                              ) {
+                                const pv = v as { value?: unknown; description?: unknown }
                                 return {
                                   key: k,
                                   value:
-                                    v.value === null || typeof v.value === "undefined"
+                                    pv.value === null || typeof pv.value === "undefined"
                                       ? ""
-                                      : typeof v.value === "object"
-                                        ? JSON.stringify(v.value)
-                                        : String(v.value),
-                                  description: v.description ? String(v.description) : "",
+                                      : typeof pv.value === "object"
+                                        ? JSON.stringify(pv.value)
+                                        : String(pv.value),
+                                  description: pv.description ? String(pv.description) : "",
                                 }
                               }
                               return {
