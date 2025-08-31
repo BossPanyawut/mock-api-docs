@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, type DragEvent } from "react"
 import { Search, Plus, Trash2, Edit2, ChevronDown, ChevronRight, Settings, X } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 
@@ -20,6 +20,8 @@ interface Endpoint {
   description?: string
   projectId: string
   fieldDescriptions?: { [statusCode: number]: FieldDescription[] }
+  requestBody?: string
+  queryParams?: string
 }
 
 
@@ -59,9 +61,13 @@ export default function Home() {
 
   const [showAddForm, setShowAddForm] = useState(false)
   const [showEditResponse, setShowEditResponse] = useState(false)
+  const [showEditRequestBody, setShowEditRequestBody] = useState(false)
+  const [showEditQueryParams, setShowEditQueryParams] = useState(false)
   const [showProjectForm, setShowProjectForm] = useState(false)
   const [view, setView] = useState<"projects" | "endpoints">("projects")
   const [editingResponse, setEditingResponse] = useState("")
+  const [editingRequestBody, setEditingRequestBody] = useState("")
+  const [editingQueryParams, setEditingQueryParams] = useState("")
   const [showFieldDescriptions, setShowFieldDescriptions] = useState(false)
   const [editingFieldDescriptions, setEditingFieldDescriptions] = useState<FieldDescription[]>([])
   const [searchTerm, setSearchTerm] = useState("")
@@ -76,6 +82,13 @@ export default function Home() {
   const [showEditGroupName, setShowEditGroupName] = useState(false)
   const [editingGroupName, setEditingGroupName] = useState("")
   const [editingGroupId, setEditingGroupId] = useState("")
+  // DnD state
+  const [draggingEndpointId, setDraggingEndpointId] = useState<string | null>(null)
+  const [dragOverGroup, setDragOverGroup] = useState<string | null>(null)
+  // Inline Add Group (in Add Endpoint modal)
+  const [showCreateGroup, setShowCreateGroup] = useState(false)
+  const [newGroupName, setNewGroupName] = useState("")
+  const [addingGroup, setAddingGroup] = useState(false)
   const supabase = createClient()
 
   const toggleGroup = (groupName: string) => {
@@ -83,6 +96,146 @@ export default function Home() {
       ...prev,
       [groupName]: !prev[groupName],
     }))
+  }
+
+  // Delete a group (and all its endpoints via cascade)
+  const deleteGroup = async (groupId: string) => {
+    const group = groups.find((g) => g.id === groupId)
+    if (!group) {
+      alert("Group not found")
+      return
+    }
+    const affectedCount = endpoints.filter((e) => e.group === group.name).length
+    const ok = confirm(
+      `Delete group "${group.name}"? This will permanently delete ${affectedCount} endpoint(s) in this group.`,
+    )
+    if (!ok) return
+
+    setLoading(true)
+    try {
+      const { error } = await supabase.from("groups").delete().eq("id", groupId)
+      if (error) throw error
+
+      // Update local state
+      const newGroups = groups.filter((g) => g.id !== groupId)
+      setGroups(newGroups)
+
+      const newEndpoints = endpoints.filter((e) => e.group !== group.name)
+      setEndpoints(newEndpoints)
+
+      if (selectedEndpoint && selectedEndpoint.group === group.name) {
+        setSelectedEndpoint(newEndpoints[0] || null)
+      }
+
+      setShowEditGroupName(false)
+      // Refresh aggregate counts
+      loadAllData()
+    } catch (err) {
+      console.error("Error deleting group:", err)
+      alert("เกิดข้อผิดพลาดในการลบกลุ่ม")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Move an endpoint to another group via drag-and-drop
+  const moveEndpointToGroup = async (endpointId: string, targetGroupName: string) => {
+    try {
+      const endpoint = endpoints.find((e) => e.id === endpointId)
+      if (!endpoint) return
+
+      if (endpoint.group === targetGroupName) return // No change
+
+      const targetGroup = groups.find((g) => g.name === targetGroupName)
+      if (!targetGroup) {
+        alert("Target group not found")
+        return
+      }
+
+      setLoading(true)
+      const { error } = await supabase
+        .from("endpoints")
+        .update({ group_id: targetGroup.id })
+        .eq("id", endpointId)
+
+      if (error) throw error
+
+      // Update local state
+      const updated = endpoints.map((e) =>
+        e.id === endpointId ? { ...e, group: targetGroup.name } : e,
+      )
+      setEndpoints(updated)
+      if (selectedEndpoint?.id === endpointId) {
+        setSelectedEndpoint({ ...selectedEndpoint, group: targetGroup.name })
+      }
+    } catch (err) {
+      console.error("Error moving endpoint:", err)
+      alert("เกิดข้อผิดพลาดในการย้าย endpoint ไปยังกลุ่มใหม่")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Create a new group inline from Add Endpoint modal
+  const createGroupInline = async () => {
+    if (!currentProject) {
+      alert("กรุณาเลือกโปรเจคก่อน")
+      return
+    }
+    const name = newGroupName.trim()
+    if (!name) {
+      alert("กรุณากรอกชื่อกลุ่ม")
+      return
+    }
+    // If exists, just select it
+    const exists = groups.some((g) => g.project_id === currentProject.id && g.name === name)
+    if (exists) {
+      setNewEndpoint((prev) => ({ ...prev, group: name }))
+      setShowCreateGroup(false)
+      setNewGroupName("")
+      return
+    }
+    setAddingGroup(true)
+    try {
+      const { data, error } = await supabase
+        .from("groups")
+        .insert([{ name, project_id: currentProject.id }])
+        .select("*")
+        .single()
+      if (error) throw error
+      setGroups([...groups, data])
+      setNewEndpoint((prev) => ({ ...prev, group: data.name }))
+      setShowCreateGroup(false)
+      setNewGroupName("")
+    } catch (err) {
+      console.error("Error creating group inline:", err)
+      alert("เกิดข้อผิดพลาดในการสร้างกลุ่ม")
+    } finally {
+      setAddingGroup(false)
+    }
+  }
+
+  const handleDragStart = (endpointId: string) => {
+    setDraggingEndpointId(endpointId)
+  }
+
+  const handleDragEnd = () => {
+    setDraggingEndpointId(null)
+    setDragOverGroup(null)
+  }
+
+  const handleGroupDragOver = (e: DragEvent, groupName: string) => {
+    e.preventDefault() // Allow drop
+    setDragOverGroup(groupName)
+  }
+
+  const handleGroupDrop = async (e: DragEvent, groupName: string) => {
+    e.preventDefault()
+    const endpointId = draggingEndpointId
+    setDragOverGroup(null)
+    setDraggingEndpointId(null)
+    if (!endpointId) return
+    await moveEndpointToGroup(endpointId, groupName)
   }
 
   useEffect(() => {
@@ -156,6 +309,8 @@ export default function Home() {
           group: endpoint.groups?.name || "General",
           responses: endpoint.responses || {},
           fieldDescriptions: endpoint.field_descriptions || {},
+          requestBody: endpoint.request_body ? JSON.stringify(endpoint.request_body, null, 2) : "",
+          queryParams: endpoint.query_params ? JSON.stringify(endpoint.query_params, null, 2) : "",
         })) || []
 
       setEndpoints(formattedEndpoints)
@@ -272,6 +427,8 @@ export default function Home() {
           group: endpoint.groups?.name || "General",
           responses: endpoint.responses || {},
           fieldDescriptions: endpoint.field_descriptions || {},
+          requestBody: endpoint.request_body ? JSON.stringify(endpoint.request_body, null, 2) : "",
+          queryParams: endpoint.query_params ? JSON.stringify(endpoint.query_params, null, 2) : "",
         })) || []
 
       setAllEndpoints(formattedEndpoints)
@@ -325,7 +482,7 @@ export default function Home() {
       }
 
       const defaultResponses =
-        newEndpoint.method === "POST"
+        (newEndpoint.method === "POST" || newEndpoint.method === "PUT")
           ? {
             201: JSON.stringify({ message: "Created successfully" }, null, 2),
             400: JSON.stringify({ error: "Bad request" }, null, 2),
@@ -342,6 +499,13 @@ export default function Home() {
             404: JSON.stringify({ error: "Not found" }, null, 2),
             500: JSON.stringify({ error: "Internal server error" }, null, 2),
           }
+
+      // Default request payloads
+      const defaultRequestBody =
+        newEndpoint.method === "POST" || newEndpoint.method === "PUT"
+          ? { sample: true }
+          : {}
+      const defaultQueryParams = newEndpoint.method === "GET" ? { page: 1, q: "" } : {}
 
       console.log("[v0] Creating endpoint with data:", {
         name: newEndpoint.name || newEndpoint.description || newEndpoint.path,
@@ -364,6 +528,8 @@ export default function Home() {
             group_id: groupId,
             responses: defaultResponses,
             field_descriptions: {},
+            request_body: defaultRequestBody,
+            query_params: defaultQueryParams,
           },
         ])
         .select(`
@@ -383,6 +549,8 @@ export default function Home() {
         group: data.groups?.name || "General",
         responses: data.responses || {},
         fieldDescriptions: data.field_descriptions || {},
+        requestBody: data.request_body ? JSON.stringify(data.request_body, null, 2) : "",
+        queryParams: data.query_params ? JSON.stringify(data.query_params, null, 2) : "",
       }
 
       console.log("[v0] Formatted endpoint:", formattedEndpoint)
@@ -435,8 +603,12 @@ export default function Home() {
   const updateResponse = async () => {
     if (!selectedEndpoint) return
 
+    let formatted: string
     try {
-      JSON.parse(editingResponse)
+      const parsed = JSON.parse(editingResponse)
+      formatted = JSON.stringify(parsed, null, 2)
+      // Keep editor in sync with the formatted JSON
+      setEditingResponse(formatted)
     } catch {
       alert("Response ต้องเป็น JSON ที่ถูกต้อง")
       return
@@ -446,7 +618,7 @@ export default function Home() {
     try {
       const updatedResponses = {
         ...selectedEndpoint.responses,
-        [selectedStatus]: editingResponse,
+        [selectedStatus]: formatted,
       }
 
       const { error } = await supabase
@@ -504,6 +676,72 @@ export default function Home() {
     } catch (error) {
       console.error("Error updating field descriptions:", error)
       alert("เกิดข้อผิดพลาดในการอัปเดต field descriptions")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const updateRequestBody = async () => {
+    if (!selectedEndpoint) return
+    let formatted: string
+    try {
+      const parsed = JSON.parse(editingRequestBody || "{}")
+      formatted = JSON.stringify(parsed, null, 2)
+      setEditingRequestBody(formatted)
+    } catch {
+      alert("Request Body ต้องเป็น JSON ที่ถูกต้อง")
+      return
+    }
+    setLoading(true)
+    try {
+      const parsed = JSON.parse(formatted)
+      const { error } = await supabase
+        .from("endpoints")
+        .update({ request_body: parsed })
+        .eq("id", selectedEndpoint.id)
+      if (error) throw error
+      const updatedEndpoints = endpoints.map((ep) =>
+        ep.id === selectedEndpoint.id ? { ...ep, requestBody: formatted } : ep,
+      )
+      setEndpoints(updatedEndpoints)
+      setSelectedEndpoint({ ...selectedEndpoint, requestBody: formatted })
+      setShowEditRequestBody(false)
+    } catch (error) {
+      console.error("Error updating request body:", error)
+      alert("เกิดข้อผิดพลาดในการอัปเดต request body")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const updateQueryParams = async () => {
+    if (!selectedEndpoint) return
+    let formatted: string
+    try {
+      const parsed = JSON.parse(editingQueryParams || "{}")
+      formatted = JSON.stringify(parsed, null, 2)
+      setEditingQueryParams(formatted)
+    } catch {
+      alert("Query Params ต้องเป็น JSON ที่ถูกต้อง")
+      return
+    }
+    setLoading(true)
+    try {
+      const parsed = JSON.parse(formatted)
+      const { error } = await supabase
+        .from("endpoints")
+        .update({ query_params: parsed })
+        .eq("id", selectedEndpoint.id)
+      if (error) throw error
+      const updatedEndpoints = endpoints.map((ep) =>
+        ep.id === selectedEndpoint.id ? { ...ep, queryParams: formatted } : ep,
+      )
+      setEndpoints(updatedEndpoints)
+      setSelectedEndpoint({ ...selectedEndpoint, queryParams: formatted })
+      setShowEditQueryParams(false)
+    } catch (error) {
+      console.error("Error updating query params:", error)
+      alert("เกิดข้อผิดพลาดในการอัปเดต query params")
     } finally {
       setLoading(false)
     }
@@ -809,12 +1047,12 @@ export default function Home() {
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-400">Endpoints</span>
                     <span className="bg-gray-800 text-pink-400 px-2 py-1 rounded font-mono text-xs">
-                      {
-                        allEndpoints.filter((ep) => {
-                          const endpointGroup = allGroups.find((g) => g.id === ep.id)
-                          return endpointGroup?.project_id === project.id
-                        }).length
-                      }
+                      {(() => {
+                        const groupIds = new Set(
+                          allGroups.filter((g) => g.project_id === project.id).map((g) => g.id),
+                        )
+                        return allEndpoints.filter((ep) => groupIds.has((ep as any).group_id)).length
+                      })()}
                     </span>
                   </div>
 
@@ -952,7 +1190,16 @@ export default function Home() {
             </button>
 
             <button
-              onClick={() => setShowAddForm(true)}
+              onClick={() => {
+                const projectGroups = groups.filter((g) => g.project_id === currentProject?.id)
+                setNewEndpoint((prev) => ({
+                  ...prev,
+                  group: projectGroups[0]?.name || "General",
+                }))
+                setShowCreateGroup(false)
+                setNewGroupName("")
+                setShowAddForm(true)
+              }}
               className="bg-pink-500 hover:bg-pink-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center space-x-2"
             >
               <Plus className="w-4 h-4" />
@@ -981,7 +1228,13 @@ export default function Home() {
                 {} as Record<string, typeof endpoints>,
               ),
             ).map(([groupName, groupEndpoints]) => (
-              <div key={groupName} className="mb-6">
+              <div
+                key={groupName}
+                className={`mb-6 rounded ${dragOverGroup === groupName ? "ring-2 ring-pink-500/60" : ""}`}
+                onDragOver={(e) => handleGroupDragOver(e, groupName)}
+                onDrop={(e) => handleGroupDrop(e, groupName)}
+                onDragLeave={() => setDragOverGroup(null)}
+              >
                 <div className="flex items-start justify-between mb-2">
                   <button
                     onClick={() => toggleGroup(groupName)}
@@ -999,16 +1252,33 @@ export default function Home() {
 
                     </div>
                   </button>
-                  <button
-                    onClick={() => {
-                      setEditingGroupName(groupName)
-                      setEditingGroupId(groups.find(g => g.name === groupName)?.id || "")
-                      setShowEditGroupName(true)
-                    }}
-                    className=" text-gray-400 hover:text-white flex items-center space-x-1 ml-2"
-                  >
-                    <Edit2 className="w-3 h-3" />
-                  </button>
+                  <div className="flex items-center gap-2 ml-2">
+                    <button
+                      onClick={() => {
+                        setEditingGroupName(groupName)
+                        setEditingGroupId(groups.find(g => g.name === groupName)?.id || "")
+                        setShowEditGroupName(true)
+                      }}
+                      className="text-gray-400 hover:text-white flex items-center"
+                      title="Edit group name"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        const id = groups.find(g => g.name === groupName)?.id
+                        if (!id) {
+                          alert("Group not found")
+                          return
+                        }
+                        deleteGroup(id)
+                      }}
+                      className="text-gray-500 hover:text-red-400 flex items-center"
+                      title="Delete group"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
 
                 {groupExpanded[groupName] !== false && (
@@ -1016,6 +1286,9 @@ export default function Home() {
                     {groupEndpoints.map((endpoint) => (
                       <button
                         key={endpoint.id}
+                        draggable
+                        onDragStart={() => handleDragStart(endpoint.id)}
+                        onDragEnd={handleDragEnd}
                         onClick={() => {
                           setSelectedEndpoint(endpoint)
                           setSelectedStatus(Number.parseInt(Object.keys(endpoint.responses)[0]) || 200)
@@ -1116,7 +1389,84 @@ export default function Home() {
                       <span className="text-xs">Edit</span>
                     </button>
                   </div>
+                  {/* Request Body / Query Params quick view */}
+                  <div className="mt-3 text-xs text-gray-400">
+                    {selectedEndpoint.method === "GET" ? (
+                      <div className="flex items-center justify-between">
+                        <span>Query Params</span>
+                        <button
+                          onClick={() => {
+                            setEditingQueryParams(selectedEndpoint.queryParams || "{}")
+                            setShowEditQueryParams(true)
+                          }}
+                          className="text-gray-400 hover:text-white text-xs"
+                        >
+                          Edit Params
+                        </button>
+                      </div>
+                    ) : selectedEndpoint.method === "POST" || selectedEndpoint.method === "PUT" ? (
+                      <div className="flex items-center justify-between">
+                        <span>Request Body</span>
+                        <button
+                          onClick={() => {
+                            setEditingRequestBody(selectedEndpoint.requestBody || "{}")
+                            setShowEditRequestBody(true)
+                          }}
+                          className="text-gray-400 hover:text-white text-xs"
+                        >
+                          Edit Body
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
+
+                {/* Params / Body Examples */}
+                {selectedEndpoint.method === "GET" ? (
+                  <div className="mb-6">
+                    <h2 className="text-xl font-semibold text-white mb-4">Params Example</h2>
+                    <div className="bg-gray-900 rounded-lg p-4 mb-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-gray-400">Query Params</span>
+                        <button
+                          onClick={() => {
+                            setEditingQueryParams(selectedEndpoint.queryParams || "{}")
+                            setShowEditQueryParams(true)
+                          }}
+                          className="text-gray-400 hover:text-white flex items-center space-x-1"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                          <span className="text-xs">Edit</span>
+                        </button>
+                      </div>
+                      <pre className="text-sm text-gray-300 overflow-x-auto">
+                        <code>{selectedEndpoint.queryParams || "{}"}</code>
+                      </pre>
+                    </div>
+                  </div>
+                ) : selectedEndpoint.method === "POST" || selectedEndpoint.method === "PUT" ? (
+                  <div className="mb-6">
+                    <h2 className="text-xl font-semibold text-white mb-4">Request Body Example</h2>
+                    <div className="bg-gray-900 rounded-lg p-4 mb-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-gray-400">Request Body</span>
+                        <button
+                          onClick={() => {
+                            setEditingRequestBody(selectedEndpoint.requestBody || "{}")
+                            setShowEditRequestBody(true)
+                          }}
+                          className="text-gray-400 hover:text-white flex items-center space-x-1"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                          <span className="text-xs">Edit</span>
+                        </button>
+                      </div>
+                      <pre className="text-sm text-gray-300 overflow-x-auto">
+                        <code>{selectedEndpoint.requestBody || "{}"}</code>
+                      </pre>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="mb-6">
                   <h2 className="text-xl font-semibold text-white mb-4">Response Examples</h2>
@@ -1166,6 +1516,7 @@ export default function Home() {
                     </pre>
                   </div>
                 </div>
+
 
                 {selectedEndpoint.fieldDescriptions?.[selectedStatus] && (
                   <div className="mb-6">
@@ -1257,6 +1608,76 @@ export default function Home() {
               </button>
               <button
                 onClick={() => setShowEditResponse(false)}
+                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Request Body Modal */}
+      {showEditRequestBody && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-900 rounded-lg p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-white mb-4">Edit Request Body</h3>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-2">Body JSON</label>
+              <textarea
+                value={editingRequestBody}
+                onChange={(e) => setEditingRequestBody(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-pink-500 font-mono text-sm"
+                rows={15}
+                placeholder="Enter JSON body..."
+              />
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={updateRequestBody}
+                className="flex-1 bg-pink-500 hover:bg-pink-600 text-white px-4 py-2 rounded-lg font-medium"
+              >
+                Save Body
+              </button>
+              <button
+                onClick={() => setShowEditRequestBody(false)}
+                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Query Params Modal */}
+      {showEditQueryParams && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-900 rounded-lg p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-white mb-4">Edit Query Params</h3>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-2">Params JSON</label>
+              <textarea
+                value={editingQueryParams}
+                onChange={(e) => setEditingQueryParams(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-pink-500 font-mono text-sm"
+                rows={15}
+                placeholder='Enter JSON like {"page":1, "q":""}'
+              />
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={updateQueryParams}
+                className="flex-1 bg-pink-500 hover:bg-pink-600 text-white px-4 py-2 rounded-lg font-medium"
+              >
+                Save Params
+              </button>
+              <button
+                onClick={() => setShowEditQueryParams(false)}
                 className="flex-1 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium"
               >
                 Cancel
@@ -1450,28 +1871,82 @@ export default function Home() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">Group</label>
-                <input
-                  type="text"
-                  value={newEndpoint.group}
-                  onChange={(e) => setNewEndpoint({ ...newEndpoint, group: e.target.value })}
-                  placeholder="Enter group name (e.g. Users, Auth, Products)"
-                  list="existing-groups"
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-pink-500"
-                />
-                <datalist id="existing-groups">
-                  <option value="General" />
-                  {Array.from(
-                    new Set(
-                      groups
-                        .filter((g) => g.project_id === currentProject?.id)
-                        .map((g) => g.name)
-                        .filter(Boolean),
-                    ),
-                  ).map((group) => (
-                    <option key={group} value={group} />
-                  ))}
-                </datalist>
-                <p className="text-xs text-gray-500 mt-1">Type a new group name or select from existing groups</p>
+                {(() => {
+                  const projectGroups = groups.filter((g) => g.project_id === currentProject?.id)
+                  if (projectGroups.length > 0) {
+                    const selectedValue = projectGroups.some((g) => g.name === newEndpoint.group)
+                      ? newEndpoint.group
+                      : projectGroups[0]?.name || ""
+                    return (
+                      <>
+                        <select
+                          value={selectedValue}
+                          onChange={(e) => setNewEndpoint({ ...newEndpoint, group: e.target.value })}
+                          className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        >
+                          {projectGroups.map((g) => (
+                            <option key={g.id} value={g.name}>
+                              {g.name}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex items-center justify-between mt-2">
+                          <p className="text-xs text-gray-500">Select a group in this project</p>
+                          {!showCreateGroup && (
+                            <button
+                              type="button"
+                              onClick={() => setShowCreateGroup(true)}
+                              className="text-xs text-pink-400 hover:text-pink-300"
+                            >
+                              + Add new group
+                            </button>
+                          )}
+                        </div>
+                        {showCreateGroup && (
+                          <div className="mt-2 flex items-center space-x-2">
+                            <input
+                              type="text"
+                              value={newGroupName}
+                              onChange={(e) => setNewGroupName(e.target.value)}
+                              placeholder="New group name"
+                              className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={createGroupInline}
+                              disabled={addingGroup}
+                              className="px-3 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-md text-sm disabled:opacity-50"
+                            >
+                              {addingGroup ? "Creating..." : "Create"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowCreateGroup(false)
+                                setNewGroupName("")
+                              }}
+                              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md text-sm"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )
+                  }
+                  return (
+                    <>
+                      <input
+                        type="text"
+                        value={newEndpoint.group}
+                        onChange={(e) => setNewEndpoint({ ...newEndpoint, group: e.target.value })}
+                        placeholder="Enter group name (e.g. Users, Auth, Products)"
+                        className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">No groups yet — type a new group name</p>
+                    </>
+                  )
+                })()}
               </div>
 
               <div>
@@ -1607,22 +2082,33 @@ export default function Home() {
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-pink-500"
                 />
               </div>
+              <div className="bg-gray-800 border border-gray-700 rounded p-3 text-xs text-gray-400">
+                Deleting a group will permanently delete all endpoints in it. This cannot be undone.
+              </div>
             </div>
 
-            <div className="flex justify-end space-x-3 mt-6">
+            <div className="flex justify-between mt-6">
               <button
-                onClick={() => setShowEditGroupName(false)}
-                className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+                onClick={() => editingGroupId && deleteGroup(editingGroupId)}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md"
               >
-                Cancel
+                Delete Group
               </button>
-              <button
-                onClick={updateGroupName}
-                disabled={loading}
-                className="px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? "Updating..." : "Update Group Name"}
-              </button>
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowEditGroupName(false)}
+                  className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={updateGroupName}
+                  disabled={loading}
+                  className="px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? "Updating..." : "Update Group Name"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
