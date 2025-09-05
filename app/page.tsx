@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Settings,
   X,
+  Copy,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -98,6 +99,9 @@ export default function Home() {
   const [showEditGroupName, setShowEditGroupName] = useState(false);
   const [editingGroupName, setEditingGroupName] = useState("");
   const [editingGroupId, setEditingGroupId] = useState("");
+  // Copy feedback states
+  const [copiedRequest, setCopiedRequest] = useState(false);
+  const [copiedResponse, setCopiedResponse] = useState(false);
   // Default base path for new endpoints (editable in header)
   const [defaultPathPrefix, setDefaultPathPrefix] = useState("api/v1/");
   // DnD state
@@ -130,6 +134,134 @@ export default function Home() {
       ...prev,
       [groupName]: !prev[groupName],
     }));
+  };
+
+  const generateDuplicateName = (
+    base: string,
+    existing: Set<string>
+  ): string => {
+    let name = `${base} (copy)`;
+    let i = 2;
+    while (existing.has(name)) {
+      name = `${base} (copy ${i})`;
+      i += 1;
+    }
+    return name;
+  };
+
+  const generateDuplicatePath = (
+    basePath: string,
+    existing: Set<string>
+  ): string => {
+    const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
+    let candidate = `${base}-copy`;
+    let i = 2;
+    while (existing.has(candidate)) {
+      candidate = `${base}-copy-${i}`;
+      i += 1;
+    }
+    return candidate.startsWith("/") ? candidate : `/${candidate}`;
+  };
+
+  // Duplicate confirm modal state
+  const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false);
+  const [duplicateTarget, setDuplicateTarget] = useState<Endpoint | null>(null);
+  const [duplicateName, setDuplicateName] = useState("");
+  const [duplicatePath, setDuplicatePath] = useState("");
+
+  const duplicateEndpoint = (ep: Endpoint) => {
+    const existingNames = new Set(endpoints.map((e) => e.name));
+    const existingPaths = new Set(endpoints.map((e) => e.path));
+    const baseName = ep.name || ep.path;
+    const newName = generateDuplicateName(baseName, existingNames);
+    const newPath = generateDuplicatePath(ep.path, existingPaths);
+
+    setDuplicateTarget(ep);
+    setDuplicateName(newName);
+    setDuplicatePath(newPath);
+    setShowDuplicateConfirm(true);
+  };
+
+  const confirmDuplicateEndpoint = async () => {
+    if (!duplicateTarget) return;
+    try {
+      const group = groups.find((g) => g.name === duplicateTarget.group);
+      if (!group) {
+        alert("Group not found for duplication");
+        return;
+      }
+
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("endpoints")
+        .insert([
+          {
+            name: duplicateName,
+            description: duplicateTarget.description,
+            path: duplicatePath,
+            method: duplicateTarget.method,
+            group_id: group.id,
+            responses: duplicateTarget.responses,
+            field_descriptions: duplicateTarget.fieldDescriptions || {},
+            request_body: duplicateTarget.requestBody || "",
+            query_params: duplicateTarget.queryParams
+              ? JSON.parse(duplicateTarget.queryParams)
+              : {},
+          },
+        ])
+        .select(
+          `
+          *,
+          groups (
+            id,
+            name
+          )
+        `
+        )
+        .single();
+
+      if (error) throw error;
+
+      const formatted = {
+        ...data,
+        group: data.groups?.name || "General",
+        responses: data.responses || {},
+        fieldDescriptions: data.field_descriptions || {},
+        requestBody:
+          data.request_body === null || typeof data.request_body === "undefined"
+            ? ""
+            : typeof data.request_body === "string"
+            ? data.request_body
+            : JSON.stringify(data.request_body, null, 2),
+        queryParams: data.query_params
+          ? JSON.stringify(data.query_params, null, 2)
+          : "",
+      } as Endpoint;
+
+      setEndpoints((prev) => [...prev, formatted]);
+      setSelectedEndpoint(formatted);
+      setShowDuplicateConfirm(false);
+      setDuplicateTarget(null);
+    } catch (err) {
+      console.error("Error duplicating endpoint:", err);
+      alert("เกิดข้อผิดพลาดในการคัดลอก endpoint");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copyToClipboard = async (
+    text: string,
+    setCopied: (v: boolean) => void
+  ) => {
+    try {
+      await navigator.clipboard.writeText(text || "");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (e) {
+      console.error("Copy failed", e);
+      alert("คัดลอกไม่สำเร็จ (Copy failed)");
+    }
   };
 
   // Delete a group (and all its endpoints via cascade)
@@ -359,7 +491,8 @@ export default function Home() {
           responses: endpoint.responses || {},
           fieldDescriptions: endpoint.field_descriptions || {},
           requestBody:
-            endpoint.request_body === null || typeof endpoint.request_body === "undefined"
+            endpoint.request_body === null ||
+            typeof endpoint.request_body === "undefined"
               ? ""
               : typeof endpoint.request_body === "string"
               ? endpoint.request_body
@@ -490,7 +623,8 @@ export default function Home() {
           responses: endpoint.responses || {},
           fieldDescriptions: endpoint.field_descriptions || {},
           requestBody:
-            endpoint.request_body === null || typeof endpoint.request_body === "undefined"
+            endpoint.request_body === null ||
+            typeof endpoint.request_body === "undefined"
               ? ""
               : typeof endpoint.request_body === "string"
               ? endpoint.request_body
@@ -1581,6 +1715,27 @@ export default function Home() {
                               )}
                             </div>
                           </div>
+                          <div className="opacity-0 group-hover:opacity-100 transition-opacity ml-2 flex-shrink-0">
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              title="Duplicate endpoint"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                duplicateEndpoint(endpoint);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  duplicateEndpoint(endpoint);
+                                }
+                              }}
+                              className="text-gray-400 hover:text-white p-1 rounded"
+                            >
+                              <Copy className="w-4 h-4" />
+                            </span>
+                          </div>
                         </button>
                       ))}
                     </div>
@@ -1656,11 +1811,14 @@ export default function Home() {
 
                 {/* Params / Body Examples */}
                 {selectedEndpoint.method === "GET" ? (
-                  <div className="mb-6">
-                    <h2 className="text-xl font-semibold text-white mb-4">
-                      Params Example
-                    </h2>
-                    <div className="bg-gray-900 rounded-lg p-4 mb-4">
+                  <details className="mb-6 group" open>
+                    <summary className="flex items-center justify-between cursor-pointer select-none">
+                      <h2 className="text-xl font-semibold text-white">
+                        Params Example
+                      </h2>
+                      <ChevronDown className="w-4 h-4 text-gray-400 transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="mt-4 bg-gray-900 rounded-lg p-4 mb-4">
                       <div className="flex items-center justify-between mb-3">
                         <span className="text-sm text-gray-400">
                           Query Params
@@ -1851,94 +2009,136 @@ export default function Home() {
                         );
                       })()}
                     </div>
-                  </div>
+                  </details>
                 ) : selectedEndpoint.method === "POST" ||
                   selectedEndpoint.method === "PUT" ? (
-                  <div className="mb-6">
-                    <h2 className="text-xl font-semibold text-white mb-4">
-                      Request Body Example
-                    </h2>
-                    <div className="bg-gray-900 rounded-lg p-4 mb-4">
+                  <details className="mb-6 group" open>
+                    <summary className="flex items-center justify-between cursor-pointer select-none">
+                      <h2 className="text-xl font-semibold text-white">
+                        Request Body Example
+                      </h2>
+                      <ChevronDown className="w-4 h-4 text-gray-400 transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="mt-4 bg-gray-900 rounded-lg p-4 mb-4">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-gray-400">Request Body</span>
-                        <button
-                          onClick={() => {
-                            setEditingRequestBody(selectedEndpoint.requestBody || "");
-                            setShowEditRequestBody(true);
-                          }}
-                          className="text-gray-400 hover:text-white flex items-center space-x-1"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                          <span className="text-xs">Edit</span>
-                        </button>
+                        <span className="text-sm text-gray-400">
+                          Request Body
+                        </span>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() =>
+                              copyToClipboard(
+                                selectedEndpoint.requestBody || "",
+                                setCopiedRequest
+                              )
+                            }
+                            className="text-gray-400 hover:text-white flex items-center space-x-1"
+                          >
+                            <Copy className="w-4 h-4" />
+                            <span className="text-xs">
+                              {copiedRequest ? "Copied" : "Copy"}
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingRequestBody(
+                                selectedEndpoint.requestBody || ""
+                              );
+                              setShowEditRequestBody(true);
+                            }}
+                            className="text-gray-400 hover:text-white flex items-center space-x-1"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                            <span className="text-xs">Edit</span>
+                          </button>
+                        </div>
                       </div>
                       <pre className="text-sm text-gray-300 overflow-x-auto">
                         <code>{selectedEndpoint.requestBody || ""}</code>
                       </pre>
                     </div>
-                  </div>
+                  </details>
                 ) : null}
 
-                <div className="mb-6">
-                  <h2 className="text-xl font-semibold text-white mb-4">
-                    Response Examples
-                  </h2>
-
-                  <div className="flex space-x-2 mb-4">
-                    {Object.keys(selectedEndpoint.responses)
-                      .sort((a, b) => Number.parseInt(a) - Number.parseInt(b))
-                      .map((status) => (
-                        <button
-                          key={status}
-                          onClick={() =>
-                            setSelectedStatus(Number.parseInt(status))
-                          }
-                          className={`px-3 py-1 rounded text-sm font-medium ${
-                            selectedStatus === Number.parseInt(status)
-                              ? "bg-pink-500 text-white"
-                              : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                          }`}
-                        >
-                          {status}
-                        </button>
-                      ))}
-                  </div>
-
-                  <div className="bg-gray-900 rounded-lg p-4 mb-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm text-gray-400">
-                        Status {selectedStatus} Response
-                      </span>
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={generateFieldDescriptions}
-                          className="text-gray-400 hover:text-blue-400 flex items-center space-x-1"
-                        >
-                          <Settings className="w-4 h-4" />
-                          <span className="text-xs">Fields</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            setEditingResponse(
-                              selectedEndpoint.responses[selectedStatus] || ""
-                            );
-                            setShowEditResponse(true);
-                          }}
-                          className="text-gray-400 hover:text-white flex items-center space-x-1"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                          <span className="text-xs">Edit</span>
-                        </button>
-                      </div>
+                <details className="mb-6 group" open>
+                  <summary className="flex items-center justify-between cursor-pointer select-none">
+                    <h2 className="text-xl font-semibold text-white">
+                      Response Examples
+                    </h2>
+                    <ChevronDown className="w-4 h-4 text-gray-400 transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="mt-4">
+                    <div className="flex space-x-2 mb-4">
+                      {Object.keys(selectedEndpoint.responses)
+                        .sort((a, b) => Number.parseInt(a) - Number.parseInt(b))
+                        .map((status) => (
+                          <button
+                            key={status}
+                            onClick={() =>
+                              setSelectedStatus(Number.parseInt(status))
+                            }
+                            className={`px-3 py-1 rounded text-sm font-medium ${
+                              selectedStatus === Number.parseInt(status)
+                                ? "bg-pink-500 text-white"
+                                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                            }`}
+                          >
+                            {status}
+                          </button>
+                        ))}
                     </div>
-                    <pre className="text-sm text-gray-300 overflow-x-auto">
-                      <code>
-                        {selectedEndpoint.responses[selectedStatus] ||
-                          "No response defined"}
-                      </code>
-                    </pre>
+
+                    <div className="bg-gray-900 rounded-lg p-4 mb-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-gray-400">
+                          Status {selectedStatus} Response
+                        </span>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() =>
+                              copyToClipboard(
+                                selectedEndpoint.responses[selectedStatus] ||
+                                  "",
+                                setCopiedResponse
+                              )
+                            }
+                            className="text-gray-400 hover:text-white flex items-center space-x-1"
+                          >
+                            <Copy className="w-4 h-4" />
+                            <span className="text-xs">
+                              {copiedResponse ? "Copied" : "Copy"}
+                            </span>
+                          </button>
+                          <button
+                            onClick={generateFieldDescriptions}
+                            className="text-gray-400 hover:text-blue-400 flex items-center space-x-1"
+                          >
+                            <Settings className="w-4 h-4" />
+                            <span className="text-xs">Fields</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingResponse(
+                                selectedEndpoint.responses[selectedStatus] || ""
+                              );
+                              setShowEditResponse(true);
+                            }}
+                            className="text-gray-400 hover:text-white flex items-center space-x-1"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                            <span className="text-xs">Edit</span>
+                          </button>
+                        </div>
+                      </div>
+                      <pre className="text-sm text-gray-300 overflow-x-auto">
+                        <code>
+                          {selectedEndpoint.responses[selectedStatus] ||
+                            "No response defined"}
+                        </code>
+                      </pre>
+                    </div>
                   </div>
-                </div>
+                </details>
 
                 {selectedEndpoint.fieldDescriptions?.[selectedStatus] && (
                   <div className="mb-6">
@@ -2796,6 +2996,68 @@ export default function Home() {
                 className="px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? "Updating..." : "Update Info"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate Confirm Modal */}
+      {showDuplicateConfirm && duplicateTarget && (
+        <div className="fixed inset-0 bg-black/75 bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-900 rounded-xl shadow-xl border border-gray-800 p-6 w-full max-w-md mx-4">
+            <div className="flex justify-between items-start">
+              <h3 className="text-lg font-semibold text-white">
+                Duplicate Endpoint
+              </h3>
+              <button
+                onClick={() => setShowDuplicateConfirm(false)}
+                className="text-gray-400 hover:text-white"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="mt-3 text-sm text-gray-300">
+              <p className="font-medium text-white mb-1">
+                Are you sure you want to duplicate this endpoint?
+              </p>
+              <p className="text-gray-400 mb-4">
+                Original:{" "}
+                <span className="text-white">
+                  {duplicateTarget.name || duplicateTarget.path}
+                </span>
+              </p>
+              <div className="bg-gray-800 border border-gray-700 rounded-md p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400 text-xs">New name</span>
+                  <span className="text-white text-sm font-mono">
+                    {duplicateName}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400 text-xs">New path</span>
+                  <span className="text-pink-400 text-sm font-mono">
+                    {duplicatePath}
+                  </span>
+                </div>
+              </div>
+              <p className="text-gray-500 text-xs mt-3">
+                You can rename or change path later in Edit.
+              </p>
+            </div>
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                onClick={() => setShowDuplicateConfirm(false)}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-md"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDuplicateEndpoint}
+                className="px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-md"
+              >
+                Duplicate
               </button>
             </div>
           </div>
