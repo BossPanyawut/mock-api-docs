@@ -11,6 +11,7 @@ import {
   Settings,
   X,
   Copy,
+  Download,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -102,6 +103,10 @@ export default function Home() {
   // Copy feedback states
   const [copiedRequest, setCopiedRequest] = useState(false);
   const [copiedResponse, setCopiedResponse] = useState(false);
+  // Response view formatting
+  const [prettyResponseView, setPrettyResponseView] = useState(true);
+  // Export dropdown
+  const [showExportMenu, setShowExportMenu] = useState(false);
   // Default base path for new endpoints (editable in header)
   const [defaultPathPrefix, setDefaultPathPrefix] = useState("api/v1/");
   // DnD state
@@ -114,6 +119,255 @@ export default function Home() {
   const [newGroupName, setNewGroupName] = useState("");
   const [addingGroup, setAddingGroup] = useState(false);
   const supabase = createClient();
+
+  // Build current project's export payload
+  const buildProjectExportPayload = () => {
+    if (!currentProject) {
+      alert("กรุณาเลือก Project ก่อน (Select a project first)");
+      return null;
+    }
+
+    try {
+      const projectGroups = groups.filter(
+        (g) => g.project_id === currentProject.id
+      );
+
+      const parseMaybeJSON = (val: unknown) => {
+        if (typeof val !== "string" || val.trim() === "") return val || null;
+        try {
+          return JSON.parse(val);
+        } catch {
+          return val;
+        }
+      };
+
+      const projectEndpoints = endpoints
+        // endpoints state already scoped to current project, but keep safe by filtering by group
+        .filter((ep) =>
+          projectGroups.some((g) => g.name === ep.group)
+        )
+        .map((ep) => ({
+          id: ep.id,
+          name: ep.name,
+          description: ep.description || "",
+          path: ep.path,
+          method: ep.method,
+          group: ep.group,
+          responses: ep.responses || {},
+          field_descriptions: ep.fieldDescriptions || {},
+          request_body: parseMaybeJSON(ep.requestBody || ""),
+          query_params: parseMaybeJSON(ep.queryParams || ""),
+        }));
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        project: currentProject,
+        groups: projectGroups,
+        endpoints: projectEndpoints,
+      };
+      return payload;
+    } catch (e) {
+      console.error("Export failed:", e);
+      alert("เกิดข้อผิดพลาดในการส่งออกข้อมูล (Export failed)");
+      return null;
+    }
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Export as JSON
+  const exportAsJSON = () => {
+    const payload = buildProjectExportPayload();
+    if (!payload || !currentProject) return;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const safeName = (currentProject.name || "project")
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    downloadBlob(
+      blob,
+      `${safeName || "project"}-export-${
+        new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")
+      }.json`
+    );
+  };
+
+  // Export as CSV (Excel-friendly)
+  const exportAsCSV = () => {
+    const payload = buildProjectExportPayload();
+    if (!payload || !currentProject) return;
+    const rows = [
+      [
+        "id",
+        "name",
+        "description",
+        "path",
+        "method",
+        "group",
+        "responses",
+        "field_descriptions",
+        "request_body",
+        "query_params",
+      ],
+      ...payload.endpoints.map((ep: any) => {
+        const s = (v: unknown) => {
+          const str =
+            typeof v === "string" ? v : JSON.stringify(v ?? "", null, 0);
+          // Escape quotes for CSV and wrap in quotes
+          return `"${(str || "").replace(/"/g, '""')}"`;
+          };
+        return [
+          s(ep.id),
+          s(ep.name),
+          s(ep.description || ""),
+          s(ep.path),
+          s(ep.method),
+          s(ep.group),
+          s(ep.responses || {}),
+          s(ep.field_descriptions || {}),
+          s(ep.request_body || ""),
+          s(ep.query_params || {}),
+        ].join(",");
+      }),
+    ].join("\n");
+
+    const blob = new Blob([rows], { type: "text/csv;charset=utf-8" });
+    const safeName = (currentProject.name || "project")
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    downloadBlob(
+      blob,
+      `${safeName || "project"}-export-${
+        new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")
+      }.csv`
+    );
+  };
+
+  // Export as DOC (Word-compatible HTML)
+  const exportAsDOC = () => {
+    const payload = buildProjectExportPayload();
+    if (!payload || !currentProject) return;
+    const safe = (s: string) =>
+      (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const html = `<!DOCTYPE html>
+      <html><head><meta charset="utf-8"><title>${safe(
+        currentProject.name
+      )} Export</title>
+      <style>
+        body{font-family:Arial,Helvetica,sans-serif;}
+        h1{font-size:20pt;margin:0 0 8pt}
+        h2{font-size:14pt;margin:16pt 0 6pt}
+        code,pre{font-family:Menlo,Consolas,monospace;background:#f5f5f5;border:1px solid #ddd;padding:8px;display:block;white-space:pre-wrap}
+        table{border-collapse:collapse;width:100%;font-size:10pt}
+        th,td{border:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}
+        .muted{color:#666}
+        .pill{display:inline-block;padding:2px 6px;border-radius:4px;background:#eee;font-weight:bold;margin-right:6px}
+      </style></head>
+      <body>
+        <h1>${safe(currentProject.name)} — Export</h1>
+        <p class="muted">Exported at ${new Date().toLocaleString()}</p>
+        ${currentProject.description ? `<p>${safe(currentProject.description)}</p>` : ""}
+        <h2>Groups (${payload.groups.length})</h2>
+        <ul>${payload.groups
+          .map((g: any) => `<li>${safe(g.name)}</li>`)
+          .join("")}</ul>
+        <h2>Endpoints (${payload.endpoints.length})</h2>
+        ${payload.endpoints
+          .map(
+            (ep: any) => `
+            <div style="margin:12px 0 18px">
+              <div><span class="pill">${safe(ep.method)}</span><b>${safe(
+              ep.path
+            )}</b> — <i>${safe(ep.name || "")}</i> <span class="muted">[${safe(
+              ep.group
+            )}]</span></div>
+              ${ep.description ? `<div class="muted">${safe(ep.description)}</div>` : ""}
+              <div><b>Responses</b><pre>${safe(
+                JSON.stringify(ep.responses || {}, null, 2)
+              )}</pre></div>
+              ${ep.request_body ? `<div><b>Request Body</b><pre>${safe(
+                JSON.stringify(ep.request_body, null, 2)
+              )}</pre></div>` : ""}
+              ${ep.query_params ? `<div><b>Query Params</b><pre>${safe(
+                JSON.stringify(ep.query_params, null, 2)
+              )}</pre></div>` : ""}
+            </div>`
+          )
+          .join("")}
+      </body></html>`;
+    const blob = new Blob([html], { type: "application/msword;charset=utf-8" });
+    const safeName = (currentProject.name || "project")
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    downloadBlob(
+      blob,
+      `${safeName || "project"}-export-${
+        new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")
+      }.doc`
+    );
+  };
+
+  // Export to PDF via print dialog (no extra deps)
+  const exportAsPDF = () => {
+    const payload = buildProjectExportPayload();
+    if (!payload || !currentProject) return;
+    const safe = (s: string) =>
+      (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${safe(
+      currentProject.name
+    )} Export</title>
+      <style>body{font-family:Arial,Helvetica,sans-serif;padding:24px} h1{margin:0 0 12px} h2{margin:18px 0 8px} pre{white-space:pre-wrap;border:1px solid #ddd;background:#f8f8f8;padding:8px}</style>
+      </head><body>
+        <h1>${safe(currentProject.name)} — Export</h1>
+        <p>Exported at ${new Date().toLocaleString()}</p>
+        ${currentProject.description ? `<p>${safe(currentProject.description)}</p>` : ""}
+        <h2>Groups (${payload.groups.length})</h2>
+        <ul>${payload.groups
+          .map((g: any) => `<li>${safe(g.name)}</li>`)
+          .join("")}</ul>
+        <h2>Endpoints (${payload.endpoints.length})</h2>
+        ${payload.endpoints
+          .map(
+            (ep: any) => `
+            <div style="margin:12px 0 18px">
+              <div><b>${safe(ep.method)} ${safe(ep.path)}</b> — ${safe(
+              ep.name || ""
+            )} [${safe(ep.group)}]</div>
+              ${ep.description ? `<div>${safe(ep.description)}</div>` : ""}
+              <div><b>Responses</b><pre>${safe(
+                JSON.stringify(ep.responses || {}, null, 2)
+              )}</pre></div>
+            </div>`
+          )
+          .join("")}
+      </body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) {
+      alert("Please allow pop-ups to export as PDF");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
 
   // Persist default path prefix in localStorage
   useEffect(() => {
@@ -838,22 +1092,12 @@ export default function Home() {
   const updateResponse = async () => {
     if (!selectedEndpoint) return;
 
-    let formatted: string;
-    try {
-      const parsed = JSON.parse(editingResponse);
-      formatted = JSON.stringify(parsed, null, 2);
-      // Keep editor in sync with the formatted JSON
-      setEditingResponse(formatted);
-    } catch {
-      alert("Response ต้องเป็น JSON ที่ถูกต้อง");
-      return;
-    }
-
     setLoading(true);
     try {
       const updatedResponses = {
         ...selectedEndpoint.responses,
-        [selectedStatus]: formatted,
+        // Save exactly as entered (no JSON validation)
+        [selectedStatus]: editingResponse,
       };
 
       const { error } = await supabase
@@ -1518,6 +1762,57 @@ export default function Home() {
               />
             </div>
 
+            <div className="relative">
+              <button
+                onClick={() => setShowExportMenu((s) => !s)}
+                disabled={!currentProject}
+                className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center space-x-2"
+              >
+                <Download className="w-4 h-4" />
+                <span>Export</span>
+              </button>
+              {showExportMenu && (
+                <div className="absolute right-0 mt-2 w-44 bg-gray-900 border border-gray-800 rounded-lg shadow-lg z-20">
+                  <button
+                    onClick={() => {
+                      exportAsJSON();
+                      setShowExportMenu(false);
+                    }}
+                    className="block w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-800 rounded-t-lg"
+                  >
+                    JSON (.json)
+                  </button>
+                  <button
+                    onClick={() => {
+                      exportAsCSV();
+                      setShowExportMenu(false);
+                    }}
+                    className="block w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
+                  >
+                    Excel (.csv)
+                  </button>
+                  <button
+                    onClick={() => {
+                      exportAsDOC();
+                      setShowExportMenu(false);
+                    }}
+                    className="block w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
+                  >
+                    Doc (.doc)
+                  </button>
+                  <button
+                    onClick={() => {
+                      exportAsPDF();
+                      setShowExportMenu(false);
+                    }}
+                    className="block w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-800 rounded-b-lg"
+                  >
+                    PDF (via Print)
+                  </button>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={() => setView("projects")}
               className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center space-x-2"
@@ -2095,6 +2390,13 @@ export default function Home() {
                         </span>
                         <div className="flex items-center space-x-2">
                           <button
+                            onClick={() => setPrettyResponseView((v) => !v)}
+                            className="text-gray-400 hover:text-white flex items-center space-x-1"
+                            title={prettyResponseView ? "Show raw" : "Pretty print"}
+                          >
+                            <span className="text-xs">{prettyResponseView ? "Raw" : "Pretty"}</span>
+                          </button>
+                          <button
                             onClick={() =>
                               copyToClipboard(
                                 selectedEndpoint.responses[selectedStatus] ||
@@ -2132,8 +2434,20 @@ export default function Home() {
                       </div>
                       <pre className="text-sm text-gray-300 overflow-x-auto">
                         <code>
-                          {selectedEndpoint.responses[selectedStatus] ||
-                            "No response defined"}
+                          {
+                            (() => {
+                              const raw =
+                                selectedEndpoint.responses[selectedStatus] ||
+                                "No response defined";
+                              if (!prettyResponseView) return raw;
+                              try {
+                                const obj = JSON.parse(raw);
+                                return JSON.stringify(obj, null, 2);
+                              } catch {
+                                return raw;
+                              }
+                            })()
+                          }
                         </code>
                       </pre>
                     </div>
@@ -2239,6 +2553,25 @@ export default function Home() {
               <label className="block text-sm font-medium text-gray-300 mb-2">
                 Response JSON
               </label>
+              <div className="flex items-center justify-end mb-2 gap-2">
+                <button
+                  onClick={() => {
+                    try {
+                      const formatted = JSON.stringify(
+                        JSON.parse(editingResponse || ""),
+                        null,
+                        2
+                      );
+                      setEditingResponse(formatted);
+                    } catch {
+                      alert("JSON ไม่ถูกต้อง จัดรูปแบบไม่ได้ (Invalid JSON)");
+                    }
+                  }}
+                  className="text-gray-300 hover:text-white text-xs px-2 py-1 border border-gray-700 rounded"
+                >
+                  Format JSON
+                </button>
+              </div>
               <textarea
                 value={editingResponse}
                 onChange={(e) => setEditingResponse(e.target.value)}
