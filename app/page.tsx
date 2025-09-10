@@ -120,8 +120,29 @@ export default function Home() {
   const [addingGroup, setAddingGroup] = useState(false);
   const supabase = createClient();
 
+  // Types for export payload
+  interface ExportedEndpoint {
+    id: string;
+    name: string;
+    description: string;
+    path: string;
+    method: string;
+    group: string;
+    responses: Record<number, string>;
+    field_descriptions: Record<number, FieldDescription[]>;
+    request_body: unknown;
+    query_params: unknown;
+  }
+
+  interface ExportPayload {
+    exported_at: string;
+    project: Project;
+    groups: Group[];
+    endpoints: ExportedEndpoint[];
+  }
+
   // Build current project's export payload
-  const buildProjectExportPayload = () => {
+  const buildProjectExportPayload = (): ExportPayload | null => {
     if (!currentProject) {
       alert("กรุณาเลือก Project ก่อน (Select a project first)");
       return null;
@@ -141,7 +162,7 @@ export default function Home() {
         }
       };
 
-      const projectEndpoints = endpoints
+      const projectEndpoints: ExportedEndpoint[] = endpoints
         // endpoints state already scoped to current project, but keep safe by filtering by group
         .filter((ep) =>
           projectGroups.some((g) => g.name === ep.group)
@@ -159,7 +180,7 @@ export default function Home() {
           query_params: parseMaybeJSON(ep.queryParams || ""),
         }));
 
-      const payload = {
+      const payload: ExportPayload = {
         exported_at: new Date().toISOString(),
         project: currentProject,
         groups: projectGroups,
@@ -221,7 +242,7 @@ export default function Home() {
         "request_body",
         "query_params",
       ],
-      ...payload.endpoints.map((ep: any) => {
+      ...payload.endpoints.map((ep: ExportedEndpoint) => {
         const s = (v: unknown) => {
           const str =
             typeof v === "string" ? v : JSON.stringify(v ?? "", null, 0);
@@ -283,12 +304,12 @@ export default function Home() {
         ${currentProject.description ? `<p>${safe(currentProject.description)}</p>` : ""}
         <h2>Groups (${payload.groups.length})</h2>
         <ul>${payload.groups
-          .map((g: any) => `<li>${safe(g.name)}</li>`)
+          .map((g: Group) => `<li>${safe(g.name)}</li>`)
           .join("")}</ul>
         <h2>Endpoints (${payload.endpoints.length})</h2>
         ${payload.endpoints
           .map(
-            (ep: any) => `
+            (ep: ExportedEndpoint) => `
             <div style="margin:12px 0 18px">
               <div><span class="pill">${safe(ep.method)}</span><b>${safe(
               ep.path
@@ -339,12 +360,12 @@ export default function Home() {
         ${currentProject.description ? `<p>${safe(currentProject.description)}</p>` : ""}
         <h2>Groups (${payload.groups.length})</h2>
         <ul>${payload.groups
-          .map((g: any) => `<li>${safe(g.name)}</li>`)
+          .map((g: Group) => `<li>${safe(g.name)}</li>`)
           .join("")}</ul>
         <h2>Endpoints (${payload.endpoints.length})</h2>
         ${payload.endpoints
           .map(
-            (ep: any) => `
+            (ep: ExportedEndpoint) => `
             <div style="margin:12px 0 18px">
               <div><b>${safe(ep.method)} ${safe(ep.path)}</b> — ${safe(
               ep.name || ""
@@ -375,7 +396,6 @@ export default function Home() {
       const saved = localStorage.getItem("defaultPathPrefix");
       if (saved) setDefaultPathPrefix(saved);
     } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     try {
@@ -1423,11 +1443,12 @@ export default function Home() {
       const parsed = JSON.parse(jsonString);
       const fields: FieldDescription[] = [];
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const extractFromObject = (obj: any, prefix = "") => {
-        Object.keys(obj).forEach((key) => {
+      const extractFromObject = (obj: unknown, prefix = "") => {
+        if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+        const rec = obj as Record<string, unknown>;
+        Object.keys(rec).forEach((key) => {
           const fullKey = prefix ? `${prefix}.${key}` : key;
-          const value = obj[key];
+          const value = rec[key];
 
           if (
             Array.isArray(value) &&
